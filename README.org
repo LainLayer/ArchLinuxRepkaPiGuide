@@ -1,0 +1,297 @@
+#+TITLE:   Arch Linux RepkaPi Installation Guide
+#+DATA:    22nd of September, 2023
+#+OPTIONS: toc:2
+
+* Notes
+
+This guide assumes youre using Arch Linux on the computer that will prepare the SD card for the Repka Pi.
+But can be done on any distro.
+
+The method described in this guide worked for me, but if you notice any issues with it, please do reach out.
+
+* Requirements
+
+- Obviously, build essentials and git ~sudo pacman -S build-essential git --needed~
+- Install ~extra/aarch64-linux-gnu-gcc~ for cross compiling u-boot to aarch64.
+- The ~unzip~ program
+
+* Downloads
+
+You will need to download the following:
+- Arch Linux aarch64 generic archive
+- DTS and DTSI from the RepkaPi website
+- DTB file of your choice from [[https://gitflic.ru/project/maxivanovich/repka-pi3-dtb-fixes]]
+
+** Arch Linux Archive
+
+Download the tarball, as per the officail guide [[https://archlinuxarm.org/platforms/armv8/generic]]
+
+Using wget inside the project folder:
+#+BEGIN_SRC console
+wget http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
+#+END_SRC
+
+** DTS and DTSI
+
+1. Go to the official website: [[https://repka-pi.ru/]]
+2. Go to "ПРОШИВКИ И OS" (Images and operating systems)
+[[./images/scr1.png]]
+3. Scroll down to "DTS и DTSI" and click the download button
+[[./images/scr2.png]]
+4. Save that file to your project folder.
+
+** DTB file
+
+Go to [[https://gitflic.ru/project/maxivanovich/repka-pi3-dtb-fixes]] and pick the image
+that fits your RepkaPi model and usecase. Save it to the project folder.
+
+** End result
+
+Your project directory should now have 3 files:
+- ~ArchLinuxARM-aarch64-latest.tar.gz~
+- ~sun50i-h5-repka-pi3-v1.4.dtb~ (or whichever DTB file you downloaded)
+- ~Uboot-21.07.23.zip~ (or whichever version is available to you in the future
+
+* Installation
+
+*Important!* - Do the following process while logged in as the root user, not with ~sudo~, to
+preserve the extended attributes and ACLs.
+
+#+BEGIN_SRC console
+$ su
+# 
+#+END_SRC
+
+** Step 1 - SD Card
+
+Insert the SD card into the host PC, and using ~lsblk~, find which drive name it is using.
+For the rest of this I will assume the disk is named ~/dev/sdc~.
+
+** Step 2 - Formatting and partitioning
+
+Format and partition the SD card.
+#+BEGIN_SRC shell
+fdisk /dev/sdc <<EOL
+o
+n
+p
+1
+
++500M
+t
+c
+n
+p
+2
+
+
+w
+EOL
+#+END_SRC
+
+This will create a 500MB vfat boot partition, followed by an ext4 partition on the rest
+of the SD card. The card may have previous partitions on it, so ~fdisk~ might prompt you
+if youre sure. Answer ~y~ and enter.
+
+Next, make the file systems in each partition.
+#+BEGIN_SRC shell
+mkfs.vfat /dev/sdc1
+mkfs.ext4 /dev/sdc2
+#+END_SRC
+
+** Step 3 - Mounting the partitions
+
+- *NOTE*: /Do not confuse ~mnt/~ with ~/mnt/~./
+
+Create the following directories in your project folder.
+#+BEGIN_SRC shell
+mkdir -p mnt/root
+mkdir -p mnt/boot
+#+END_SRC
+
+These will mount the root and boot partitions respectively.
+#+BEGIN_SRC shell
+mount /dev/sdc1 mnt/boot
+mount /dev/sdc2 mnt/root
+#+END_SRC
+
+** Step 4 - Unpacking the Arch Linux tarball
+
+Use ~bsdtar~ to unpack the arch linux aarch64 generic tarball into the root partition.
+
+#+BEGIN_SRC shell
+bsdtar -xpf ArchLinuxARM-aarch64-latest.tar.gz -C mnt/root
+#+END_SRC
+
+Next, move the boot files into the boot partition.
+#+BEGIN_SRC
+mv mnt/root/boot/* mnt/boot/
+#+END_SRC
+
+Now we need to sync the buffer to write everything to the SD card, this will take a few minutes, its not stuck.
+#+BEGIN_SRC shell
+sync
+#+END_SRC
+
+** Step 5 - Unmount the SD card
+
+Just unmount the root and boot folders for now.
+
+#+BEGIN_SRC shell
+umount mnt/boot
+umount mnt/root
+#+END_SRC
+
+** Step 6 - Compiling U-Boot
+
+Unzip the Uboot zip archive and cd into the ~Uboor-repka~ folder.
+#+BEGIN_SRC shell
+unzip Uboot-21.07.23.zip
+cd Uboot/Uboot-repka
+#+END_SRC
+
+*** Compiling the ARM Trusted Firmware
+
+#+BEGIN_SRC shell
+git clone https://github.com/ARM-software/arm-trusted-firmware.git
+cd arm-trusted-firmware
+make CROSS_COMPILE=aarch64-linux-gnu- PLAT=sun50i_a64 DEBUG=1 bl31
+cd ..
+#+END_SRC
+
+*** Compiling U-Boot
+
+In the current directory, there should be a file named something like ~u-boot-v<version>.zip~ (for example ~u-boot-v2022.04.zip~)
+
+Unzip this file, cd into the folder it creates and build it as follows:
+#+BEGIN_SRC shell
+cd u-boot-v2022.04
+make clean
+make CROSS_COMPILE=aarch64-linux-gnu- BL31=../arm-trusted-firmware/build/sun50i_a64/debug/bl31.bin Repka_H5_defconfig
+make -j$(nproc) CROSS_COMPILE=aarch64-linux-gnu- BL31=../arm-trusted-firmware/build/sun50i_a64/debug/bl31.bin
+#+END_SRC
+
+*** Writing U-Boot onto the SD card
+
+After the build is finished, there should be a file called ~u-boot-sunxi-with-spl.bin~ in the current directory.
+This file needs to be written with ~dd~ into the SD card.
+
+#+BEGIN_SRC shell
+dd if=u-boot-sunxi-with-spl.bin of=/dev/sdc bs=1024 seek=8 conv=notrunc
+#+END_SRC
+
+** Step 7 - Mount the partitions again
+
+#+BEGIN_SRC shell
+mount /dev/sdc1 mnt/boot
+mount /dev/sdc2 mnt/root
+#+END_SRC
+
+** Step 8 - DTB file
+
+You need to move the ~.dtb~ file you downloaded at the start into ~mnt/boot/dtbs/allwinner/~ and it has to be named
+exactly ~sun50i-h5-repka-pi3.dtb~.
+
+#+BEGIN_SRC shell
+cp ./sun50i-h5-repka-pi3-v1.4.dtb mnt/boot/dtbs/allwinner/sun50i-h5-repka-pi3.dtb
+#+END_SRC
+
+** Step 9 - Boot script
+
+This repo contains files named ~boot.scr~, ~boot.txt~ and ~uboot.env~. Copy them into ~mnt/boot/~.
+I have no idea what they do, I found them online and they work for me. ~boot.txt~ is probably optional.
+
+#+BEGIN_SRC shell
+cp uboot.env mnt/boot
+cp boot.scr mnt/boot
+cp boot.txt mnt/boot
+#+END_SRC
+
+** Step 10 - fstab
+
+Use ~blkid~ to get the UUID of the boot and root partitions.
+#+BEGIN_SRC shell
+blkid /dev/sdc1
+blkid /dev/sdc2
+#+END_SRC
+
+Then open ~mnt/root/etc/fstab~ in your favorite text editor.
+Edit it to look like this:
+#+BEGIN_SRC fstab
+# /etc/fstab: Static file system info
+#
+# <file system>              <dir>       <type>  <options>                                                                                              <dump>  <pass>
+
+UUID=<uuid of /dev/sdc1>     /boot       vfat    rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=ascii,shortname=mixed,utf8,errors=remount-ro  0       2
+UUID=<uuid of /dev/sdc2>     /           ext4    defaults,errors=remount-ro                                                                             0       1
+#+END_SRC
+
+Save the file.
+
+** Step 11 - Static IP setup (optional)
+
+This is needed in case you're running the RepkaPi headlessly (no screen/keyboard/mouse).
+
+*** Find your router's default gateway
+
+#+BEGIN_SRC shell
+ip route | grep default
+#+END_SRC
+
+This will print something like ~default via 192.168.0.1 dev enp4s0 proto dhcp src 192.168.0.3 metric 20100~.
+The first IP is your default gateway.
+
+*** Editing the network file
+
+Open ~mnt/root/etc/systemd/network/en.network~ with your favorite text editor.
+
+Edit it to look like this:
+#+BEGIN_SRC
+[Match]
+Name=en*
+
+[Network]
+DHCP=no
+DNSSEC=no
+Gateway=<your default gateway>
+Address=<the static IP you want>/24
+DNS=8.8.8.8 # or any other DNS server you like
+#+END_SRC
+
+For example, if youre default gateway is ~192.168.0.1~, you can pick an IP like ~192.168.0.100~.
+This static IP will be used for connecting to the RepkaPi over SSH.
+
+- *NOTE*: /Make sure you dont already have a device running on the IP youre trying to set./
+
+** Step 12 - Unmounting and ejecting
+
+#+BEGIN_SRC shell
+umount mnt/boot
+umount mnt/root
+eject /dev/sdc
+#+END_SRC
+
+With this the SD card is primed and ready for use. Remove the SD card from your PC, and insert it
+into the RepkaPi and power on the device.
+
+** Step 13 - Post Install
+
+Firstly, the default users and passwords are:
+| user  | password |
+|-------+----------|
+| alarm | alarm    |
+| root  | root     |
+
+Open a shell on this new Arch Linux install either through a keyboard and screen or SSH.
+Run the following commands:
+#+BEGIN_SRC shell
+pacman-key --init
+pacman-key --populate archlinuxarm
+pacman -Syu
+#+END_SRC
+
+After your system is done updating, reboot, and this guide is over.
+
+* Contributing
+
+If you know a better way to do this, open an issue or a pull request.
