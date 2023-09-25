@@ -50,7 +50,7 @@ that fits your RepkaPi model and usecase. Save it to the project folder.
 Your project directory should now have 3 files:
 - ~ArchLinuxARM-aarch64-latest.tar.gz~
 - ~sun50i-h5-repka-pi3-v1.4.dtb~ (or whichever DTB file you downloaded)
-- ~Uboot-21.07.23.zip~ (or whichever version is available to you in the future
+- ~Uboot-21.07.23.zip~ (or whichever version is available to you in the future)
 
 * Installation
 
@@ -101,7 +101,7 @@ mkfs.ext4 /dev/sdc2
 
 ** Step 3 - Mounting the partitions
 
-- *NOTE*: /Do not confuse ~mnt/~ with ~/mnt/~./
+- *NOTE*: Do not confuse ~mnt/~ with ~/mnt/~.
 
 Create the following directories in your project folder.
 #+BEGIN_SRC shell
